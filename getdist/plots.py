@@ -944,6 +944,80 @@ class GetDistPlotter(_BaseObject):
             xmin, xmax = self._check_param_ranges(root, name, xmin, xmax)
         return xmin, xmax
 
+    def add_whisker(self, root, param, plotno=0, ax=None, title_limit=None, **kwargs):
+        """
+        Low-level function to add a 1D marginalized density line to a plot
+
+        :param root: The root name of the samples
+        :param param: The parameter name
+        :param plotno: The index of the line being added to the plot
+        :param ax: optional :class:`~matplotlib:matplotlib.axes.Axes` instance (or y,x subplot coordinate)
+                   to add to (defaults to current plot or the first/main plot if none)
+        :param title_limit: if not None, a maginalized limit (1,2..) to print as the title of the plot
+        :param kwargs: arguments for :func:`~matplotlib:matplotlib.pyplot.plot`
+        :return: min, max for the plotted density
+        """
+        param = self._check_param(root, param)
+        ax = self.get_axes(ax, pars=(param,))
+        
+        if isinstance(root, MixtureND):
+            density = root.density1D(param.name)
+            if not normalized:
+                density.normalize(by='max')
+        else:
+            density = self.sample_analyser.get_density(root, param, likes=self.settings.plot_meanlikes)
+            if density is None:
+                return None
+
+        mean = root.mean(param.name)
+        if kwargs.get("whisker_std",False):
+            std = root.std(param.name)
+            tt = (mean-std,mean+std)
+        else:
+            tt = root.twoTailLimits(param.name,kwargs.get("whisker_fraction",0.68))
+        title_limit = title_limit if title_limit is not None else self.settings.title_limit
+        
+        ekwargs = dict([(k,v) for k,v in self._get_line_styles(plotno, **kwargs).items() if "whisker" not in k])
+        
+        self.lines_added[plotno] = kwargs
+        #print([mean],[0+plotno],np.array([[mean-tt[0]],[tt[1]-mean]]).shape, ekwargs) 
+        l = ax.errorbar([mean],[0+plotno],xerr=np.array([[mean-tt[0]],[tt[1]-mean]]),**ekwargs)
+        
+        if kwargs.get("whisker_ref") is not None and plotno==kwargs.get("whisker_ref"):
+            c = kwargs.get("whisker_ref_color",l[0].get_color())
+            ls = kwargs.get("whisker_ref_ls",l[0].get_linestyle())
+            lw = kwargs.get("whisker_ref_lw",l[0].get_linewidth())
+            alpha = kwargs.get("whisker_ref_alpha",l[0].get_alpha())
+            ax.axvline(mean,color=c,ls=ls,lw=lw,alpha=alpha)
+        if kwargs.get("whisker_both"):
+            select = (density.x>mean+(tt[0]-mean)* kwargs["whisker_both_cut"] ) * (density.x<mean+(tt[1]-mean)*kwargs["whisker_both_cut"] )
+            c = kwargs.get("whisker_both_color",l[0].get_color())
+            ls = kwargs.get("whisker_both_ls",l[0].get_linestyle())
+            lw = kwargs.get("whisker_both_lw",l[0].get_linewidth())
+            alpha = kwargs.get("whisker_both_alpha",l[0].get_alpha())
+            ax.plot(density.x[select], plotno + density.P[select]*.5,lw=lw,c=c,ls=ls,alpha=alpha)
+
+        #l, = ax.plot(density.x, density.P, **kwargs)
+        #if kwargs.get('dashes'):
+        #    l.set_dashes(kwargs['dashes'])
+        #if self.settings.plot_meanlikes:
+        #    kwargs['lw'] = self._scaled_linewidth(self.settings.linewidth_meanlikes)
+        #    ax.plot(density.x, density.likes, **kwargs)
+        if title_limit:
+            if isinstance(root, MixtureND):
+                raise ValueError('title_limit not currently supported for MixtureND')
+            samples = self.sample_analyser.samples_for_root(root)
+            if self.settings.title_limit_labels:
+                caption = samples.getInlineLatex(param, limit=title_limit)
+            else:
+                _, texs = samples.getLatex([param], title_limit)
+                caption = texs[0]
+            if '---' not in caption:
+                ax.set_title('$' + caption + '$', fontsize=self._scaled_fontsize(self.settings.title_limit_fontsize,
+                                                                                 self.settings.axes_fontsize))
+
+        return density.bounds() #((tt[0]-mean)*2+mean,(tt[1]-mean)*2+mean)
+
     def add_1d(self, root, param, plotno=0, normalized=None, ax=None, title_limit=None, **kwargs):
         """
         Low-level function to add a 1D marginalized density line to a plot
@@ -974,7 +1048,6 @@ class GetDistPlotter(_BaseObject):
         title_limit = title_limit if title_limit is not None else self.settings.title_limit
         if normalized:
             density.normalize()
-
         kwargs = self._get_line_styles(plotno, **kwargs)
         self.lines_added[plotno] = kwargs
         l, = ax.plot(density.x, density.P, **kwargs)
@@ -1433,6 +1506,97 @@ class GetDistPlotter(_BaseObject):
                 c['lw'] = lws[i]
         return line_args
 
+    def _make_whisker_args(self, nroots, **kwargs):
+        whisker_args = kwargs.get('whisker_args')
+        if whisker_args is None:
+            whisker_args = kwargs.get('line_args')
+        if whisker_args is None:
+            whisker_args = kwargs.get('contour_args')
+        if whisker_args is None:
+            whisker_args = [{}] * nroots
+        elif isinstance(whisker_args, Mapping):
+            whisker_args = [whisker_args] * nroots
+        if len(whisker_args) < nroots:
+            whisker_args += [{}] * (nroots - len(line_args))
+        colors = self._get_color_at_index(kwargs.get('colors'))
+
+        def _get_list(tag):
+            ret = kwargs.get(tag)
+            if ret is None:
+                return None
+            if not isinstance(ret, (list, tuple)):
+                return [ret] * nroots
+            return ret
+
+        lws = _get_list('lws')
+        alphas = _get_list('alphas')
+        ls = _get_list('ls')
+
+        wh_defaults = [
+            ("marker","o"),
+            (("markeredgecolor","mec"),),
+            (("markeredgewidth","mew"),0),
+            (("markerfacecolor","mfc"),),
+            (("markerfacecoloralt","mfcalt"),),
+            (("markersize","ms"),3),
+            ("capsize",0),
+            (("std","whisker_std"),False),
+            (("fraction","whisker_fraction"),0.68),
+            (("ref","whisker_ref"),None),
+            (("ref_color","whisker_ref_color"),),
+            (("ref_lw","whisker_ref_lw"),),
+            (("ref_ls","whisker_ref_ls"),),
+            (("ref_alpha","whisker_ref_alpha"),),
+            (("both","whisker_both"),False),
+            (("both_cut","whisker_both_cut"),2.5),
+            (("both_color","whisker_both_color"),),
+            (("both_lw","whisker_both_lw"),),
+            (("both_ls","whisker_both_ls"),),
+            (("both_alpha","whisker_both_alpha"),),
+            ]
+
+
+
+        wh_options = {}
+        for i,w in enumerate(wh_defaults):
+            opt = [None]
+            if len(w)==2:
+                opt += [[w[1]]*nroots]
+            if isinstance((w[0]), (list, tuple)):
+                for j in range(0,len(w[0])):
+                    opt += [_get_list("whisker_"+w[0][j])]
+                    nopt = w[0][j]
+                    #print(j,nopt)
+            else:
+                opt += [_get_list("whisker_"+w[0])]
+                nopt = w[0]
+            #print(nopt,opt)
+            rpt = opt[0]
+            for o in opt[1:]:
+                if rpt is None:
+                    rpt=o
+                else:
+                    rpt = [o[i] if o and i < len(o) and o[i] else rpt[i] for i in range(nroots)]
+            wh_options[nopt] = rpt
+        
+        for i, args in enumerate(whisker_args):
+            c = args.copy()  # careful to copy before modifying any
+            whisker_args[i] = c
+            if colors and i < len(colors) and colors[i]:
+                c['color'] = colors[i]
+            if ls and i < len(ls) and ls[i]:
+                c['ls'] = ls[i]
+            if alphas and i < len(alphas) and alphas[i] is not None:
+                c['alpha'] = alphas[i]
+            if lws and i < len(lws) and lws[i]:
+                c['lw'] = lws[i]
+            for k,v in wh_options.items():
+                if v and i < len(v) and v[i]:
+                    c[k] = v[i]
+                    
+        return whisker_args
+
+
     def _make_contour_args(self, nroots, **kwargs):
         contour_args = self._make_line_args(nroots, **kwargs)
         filled: Union[None, bool, Sequence] = kwargs.get('filled')
@@ -1596,6 +1760,7 @@ class GetDistPlotter(_BaseObject):
                 * **alphas**: list of alphas for the different lines plotted
                 * **line_args**: a list of dictionaries with settings for each set of lines
                 * **marker_args**: a dictionary with settings for the marker(s)
+                * **whisker_args**: a dictionary with settings for the marker(s)
                 * arguments for :func:`~GetDistPlotter.set_axes`
 
         .. plot::
@@ -1623,11 +1788,19 @@ class GetDistPlotter(_BaseObject):
         _no_finish = kwargs.pop('_no_finish', False)
         line_args = self._make_line_args(len(roots), **kwargs)
         xmin, xmax = None, None
+        whisker = kwargs.get("whisker",False)
+        if whisker:
+            whisker_args = self._make_whisker_args(len(roots), **kwargs)
+            nw = len(roots)
+            whmin, whmax = -.8,nw-1+.8
         for i, root in enumerate(roots):
             root_param = self._check_param(root, param, param_renames)
             if not root_param:
                 continue
-            bounds = self.add_1d(root, root_param, i, normalized=normalized, title_limit=title_limit if not i else 0,
+            if whisker:
+                bounds = self.add_whisker(root, root_param, i, ax=ax, title_limit=title_limit if not i else 0, **whisker_args[i])
+            else:
+                bounds = self.add_1d(root, root_param, i, normalized=normalized, title_limit=title_limit if not i else 0,
                                  ax=ax, **line_args[i])
             xmin, xmax = self._update_limit(bounds, (xmin, xmax))
             if bounds is not None and not plotparam:
@@ -1642,10 +1815,14 @@ class GetDistPlotter(_BaseObject):
         else:
             xmin, xmax = self._check_param_ranges(plotroot, plotparam.name, xmin, xmax)
         if normalized:
+            m0 = 0
             mx = ax.yaxis.get_view_interval()[-1]
         else:
             mx = 1.099
-        kwargs['lims'] = [xmin, xmax, 0, mx]
+            m0 = 0
+        if whisker:
+            m0,mx = whmin,whmax
+        kwargs['lims'] = [xmin, xmax, m0, mx]
         self.set_axes([plotparam], ax=ax, **kwargs)
 
         if normalized:
