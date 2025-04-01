@@ -983,6 +983,7 @@ class GetDistPlotter(_BaseObject):
         #print([mean],[0+plotno],np.array([[mean-tt[0]],[tt[1]-mean]]).shape, ekwargs) 
         l = ax.errorbar([mean],[0+plotno],xerr=np.array([[mean-tt[0]],[tt[1]-mean]]),**ekwargs)
         
+        #print(kwargs.get("whisker_ref"),plotno,kwargs.get("whisker_ref")) 
         if kwargs.get("whisker_ref") is not None and plotno==kwargs.get("whisker_ref"):
             c = kwargs.get("whisker_ref_color",l[0].get_color())
             ls = kwargs.get("whisker_ref_ls",l[0].get_linestyle())
@@ -996,7 +997,17 @@ class GetDistPlotter(_BaseObject):
             lw = kwargs.get("whisker_both_lw",l[0].get_linewidth())
             alpha = kwargs.get("whisker_both_alpha",l[0].get_alpha())
             ax.plot(density.x[select], plotno + density.P[select]*.5,lw=lw,c=c,ls=ls,alpha=alpha)
-
+        if kwargs.get("whisker_print_mean"):
+            
+            txt = ("${:.%d}"%kwargs.get("whisker_print_mean_ndigits",3)).format(mean)
+            te = tt[1]-mean
+            be = mean-tt[0]
+            if abs(te-be)<(te+be)/(2*kwargs.get("whisker_print_mean_precision",10)):
+                txt += (" \\pm {:.%d}$"%kwargs.get("whisker_print_mean_ndigits",3)).format(te)
+            else:
+                txt += "^{"+ ("+{:.%d}"%kwargs.get("whisker_print_mean_ndigits",3)).format(te)+"}_{-"+("{:.%d}"%kwargs.get("whisker_print_mean_ndigits",3)).format(be)+"}$"
+            
+            ax.text(mean,plotno+kwargs.get("whisker_print_mean_pad",0.2),txt,ha="center",color=kwargs.get("whisker_print_mean_color",kwargs.get("color")),fontsize=kwargs.get("whisker_print_mean_fontsize",self._scaled_fontsize(self.settings.axes_fontsize)),alpha=kwargs.get("whisker_print_mean_alpha",1))
         #l, = ax.plot(density.x, density.P, **kwargs)
         #if kwargs.get('dashes'):
         #    l.set_dashes(kwargs['dashes'])
@@ -1553,6 +1564,16 @@ class GetDistPlotter(_BaseObject):
             (("both_lw","whisker_both_lw"),),
             (("both_ls","whisker_both_ls"),),
             (("both_alpha","whisker_both_alpha"),),
+            (("pad","whisker_pad"),0.8),
+            (("pad_top","whisker_pad_top"),),
+            (("pad_bottom","whisker_pad_bottom"),),
+            (("print_mean","whisker_print_mean"),False),
+            (('print_mean_precision','whisker_print_mean_precision'),10),
+            (('print_mean_pad','whisker_print_mean_pad'),0.2),
+            (('print_mean_fontsize','whisker_print_mean_fontsize'),None),
+            (('print_mean_color',"whisker_print_mean_color"),None),
+            (('print_mean_alpha','whisker_print_mean_alpha'),None),
+            (('print_mean_ndigits','whisker_print_mean_ndigits'),3),
             ]
 
 
@@ -1576,7 +1597,8 @@ class GetDistPlotter(_BaseObject):
                 if rpt is None:
                     rpt=o
                 else:
-                    rpt = [o[i] if o and i < len(o) and o[i] else rpt[i] for i in range(nroots)]
+                    rpt = [o[i] if o and i < len(o) and o[i] is not None else rpt[i] for i in range(nroots)]
+                    #print(i,rpt)
             wh_options[nopt] = rpt
         
         for i, args in enumerate(whisker_args):
@@ -1591,9 +1613,9 @@ class GetDistPlotter(_BaseObject):
             if lws and i < len(lws) and lws[i]:
                 c['lw'] = lws[i]
             for k,v in wh_options.items():
-                if v and i < len(v) and v[i]:
+                if v and i < len(v) and v[i] is not None:
                     c[k] = v[i]
-                    
+        #print("WH",whisker_args)
         return whisker_args
 
 
@@ -1788,11 +1810,14 @@ class GetDistPlotter(_BaseObject):
         _no_finish = kwargs.pop('_no_finish', False)
         line_args = self._make_line_args(len(roots), **kwargs)
         xmin, xmax = None, None
+        
         whisker = kwargs.get("whisker",False)
         if whisker:
             whisker_args = self._make_whisker_args(len(roots), **kwargs)
             nw = len(roots)
-            whmin, whmax = -.8,nw-1+.8
+            padtop = kwargs.get('whisker_pad_top', kwargs.get('whisker_pad', [0.8]))[0]
+            padbottom = kwargs.get('whisker_pad_bottom', kwargs.get('whisker_pad', [0.8]))[0]
+            whmin, whmax = -padbottom,nw-1+padtop
         for i, root in enumerate(roots):
             root_param = self._check_param(root, param, param_renames)
             if not root_param:
