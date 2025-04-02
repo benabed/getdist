@@ -35,6 +35,93 @@ from getdist.types import empty_dict
 """Plotting scripts for GetDist outputs"""
 
 
+def pdg_digits(v):
+    # return the relevant three digits for pdg format, the exponent and the number of digits 
+    ex = int(np.floor(np.log10(np.abs((v)))))
+    threedgt = int(np.floor((v)/(10**(ex-2))))
+    n = 2 if threedgt<355 else 1
+    if threedgt>=950:
+        threedgt=100
+        ex+=1
+        n+=1
+    return int(np.round(threedgt/10**3,n)*10**n),n,ex
+def pdg_latexform(v,ex,n,expforce=False,explim=5):
+    # buid the latex form of the number
+    # decides to go to x.yyy x 10^nnn if |nnn|>explim or if exforce is true
+    trail = ""
+    expme = False
+    if ex<-explim or expforce:
+        trail = "\\times 10^{-%d}"%(-ex)
+        ex = 0
+        expme = True    
+    elif ex>explim or expforce:
+        trail = "\\times 10^{%d}"%(ex)
+        ex = 0
+        expme = True
+    r=""
+    if ex<0 :
+        r = "0."+"0"*(abs(ex)-1)+"%d"%v
+    else: #ex<=0:
+        p = "%d"%v
+        r = p[:ex+1]+ (("."+("%d"%v)[ex+1:]+"0"*min(ex-n-1,0)) if len(p)>ex+1 else "" )
+    # remove trailing zeros
+    ll = r.split(".")
+    if len(ll)>1 and ll[1][-1]=="0":
+        i=1
+        while(i<len(ll[1])+1):
+            if ll[1][-i]!="0":
+                break
+            i+=1
+        if r[-i]==".":
+            if r[-i-1]=="1" and len(r)==i+1:
+                # special case the number is 1.0, keep it this way
+                pass
+            else:
+                r = r[:-i]
+        elif r[-i]=="1"  :
+            if -i+2<0:
+                # special case, the number is 0.-some zeros-10, keep it this way
+                r = r[:-i+2]
+        else : 
+            r = r[:-i+1]
+            
+    return r+trail,expme
+
+def pdg_format(val, tts):
+    # Do something about limits
+    # tbw
+
+    # Check whether the two tails are close enough.
+    # pdg requires that we keep a single value if both are within 10% of mean
+    errs = val-tts[0],tts[1]-val
+    if abs(errs[1]-errs[0])< ((errs[1]+errs[0])/40.):
+        merr = max(errs)
+        nerr,n,ex = pdg_digits(merr)
+        if val<merr:
+            rv,nv,exv = pdg_digits(val)
+            r = "$"+pdg_latexform(rv,exv,nv)[0] 
+        else:
+            rv = int(np.round(val/(10**(ex+1)),n)*10**n)
+            r = "$"+pdg_latexform(rv,int(np.floor(np.log10(np.abs((val))))),n)[0] 
+        r=r+" \\pm "+pdg_latexform(nerr,ex,n)[0]+"$"
+    else:
+        merr = min(errs)
+        nerr,n,ex = pdg_digits(merr)
+        expforce = pdg_latexform(val,ex,n)[1]
+        bot,nb,exb = pdg_digits(errs[0])
+        top,nt,ext = pdg_digits(errs[1])
+        if val<merr:
+            rv,nv,exv = pdg_digits(val)
+            r = "$"+pdg_latexform(rv,exv,nv)[0] 
+        else:
+            rv = int(np.round(val/(10**(ex+1)),n)*10**n)
+            r = "$"+pdg_latexform(rv,int(np.floor(np.log10(np.abs((val))))),n)[0] 
+        
+        r = r +" ^{+"+pdg_latexform(top,ext,nt,expforce)[0]+"}_{-"+pdg_latexform(bot,exb,nb,expforce)[0]+"}$"
+    return r
+
+
+
 def extend_list_zip(*args):
     vals = [(list(arg) if isinstance(arg, (list, tuple)) else [arg]) for arg in args]
     for i in range(len(args[0])):
@@ -999,15 +1086,16 @@ class GetDistPlotter(_BaseObject):
             ax.plot(density.x[select], plotno + density.P[select]*.5,lw=lw,c=c,ls=ls,alpha=alpha)
         if kwargs.get("whisker_print_mean"):
             
-            txt = ("${:.%d}"%kwargs.get("whisker_print_mean_ndigits",3)).format(mean)
-            te = tt[1]-mean
-            be = mean-tt[0]
-            if abs(te-be)<(te+be)/(2*kwargs.get("whisker_print_mean_precision",10)):
-                txt += (" \\pm {:.%d}$"%kwargs.get("whisker_print_mean_ndigits",3)).format(te)
-            else:
-                txt += "^{"+ ("+{:.%d}"%kwargs.get("whisker_print_mean_ndigits",3)).format(te)+"}_{-"+("{:.%d}"%kwargs.get("whisker_print_mean_ndigits",3)).format(be)+"}$"
+            txt = pdg_format(mean,tt)
             
-            ax.text(mean,plotno+kwargs.get("whisker_print_mean_pad",0.2),txt,ha="center",color=kwargs.get("whisker_print_mean_color",kwargs.get("color")),fontsize=kwargs.get("whisker_print_mean_fontsize",self._scaled_fontsize(self.settings.axes_fontsize)),alpha=kwargs.get("whisker_print_mean_alpha",1))
+            ax.text(mean,plotno+kwargs.get("whisker_print_mean_pad",0.2),txt,
+                    ha="center",color=kwargs.get("whisker_print_mean_color",kwargs.get("color")),
+                    fontsize=kwargs.get("whisker_print_mean_fontsize",self._scaled_fontsize(self.settings.axes_fontsize)),
+                    alpha=kwargs.get("whisker_print_mean_alpha",1),
+                    bbox=dict(facecolor='white', edgecolor='none', pad=0))
+
+
+
         #l, = ax.plot(density.x, density.P, **kwargs)
         #if kwargs.get('dashes'):
         #    l.set_dashes(kwargs['dashes'])
@@ -1568,12 +1656,10 @@ class GetDistPlotter(_BaseObject):
             (("pad_top","whisker_pad_top"),),
             (("pad_bottom","whisker_pad_bottom"),),
             (("print_mean","whisker_print_mean"),False),
-            (('print_mean_precision','whisker_print_mean_precision'),10),
             (('print_mean_pad','whisker_print_mean_pad'),0.2),
             (('print_mean_fontsize','whisker_print_mean_fontsize'),None),
             (('print_mean_color',"whisker_print_mean_color"),None),
             (('print_mean_alpha','whisker_print_mean_alpha'),None),
-            (('print_mean_ndigits','whisker_print_mean_ndigits'),3),
             ]
 
 
