@@ -1,6 +1,8 @@
 import os
 import copy
 import matplotlib
+import matplotlib.patheffects as PathEffects
+
 import sys
 import warnings
 import logging
@@ -87,12 +89,26 @@ def pdg_latexform(v,ex,n,expforce=False,explim=5):
             
     return r+trail,expme
 
-def pdg_format(val, tts):
+def pdg_format(val, tts, conf=0,explim=5):
     # Do something about limits
-    # tbw
+    if tts[0] is np.nan:
+        # lower limit !
+        nerr,n,ex = pdg_digits(tts[1])
+        r = "$ < "+pdg_latexform(nerr,ex,n,explim=explim)[0]
+        if val:
+            r+= "\\ \\ (%2d\\%%)$"%int(100*conf)
+        return r
+    elif tts[1] is np.nan:
+        # upper limit !
+        nerr,n,ex = pdg_digits(tts[0])
+        r = "$ > "+pdg_latexform(nerr,ex,n,explim=explim)[0]
+        if val:
+            r+= "\\ \\ (%2\\%%)$"%int(100*conf)
+        return r
 
     # Check whether the two tails are close enough.
     # pdg requires that we keep a single value if both are within 10% of mean
+    
     errs = val-tts[0],tts[1]-val
     if abs(errs[1]-errs[0])< ((errs[1]+errs[0])/40.):
         merr = max(errs)
@@ -102,22 +118,22 @@ def pdg_format(val, tts):
             r = "$"+pdg_latexform(rv,exv,nv)[0] 
         else:
             rv = int(np.round(val/(10**(ex+1)),n)*10**n)
-            r = "$"+pdg_latexform(rv,int(np.floor(np.log10(np.abs((val))))),n)[0] 
-        r=r+" \\pm "+pdg_latexform(nerr,ex,n)[0]+"$"
+            r = "$"+pdg_latexform(rv,int(np.floor(np.log10(np.abs((val))))),n,explim=explim)[0] 
+        r=r+" \\pm "+pdg_latexform(nerr,ex,n,explim=explim)[0]+"$"
     else:
         merr = min(errs)
         nerr,n,ex = pdg_digits(merr)
-        expforce = pdg_latexform(val,ex,n)[1]
+        expforce = pdg_latexform(val,ex,n,explim=explim)[1]
         bot,nb,exb = pdg_digits(errs[0])
         top,nt,ext = pdg_digits(errs[1])
         if val<merr:
             rv,nv,exv = pdg_digits(val)
-            r = "$"+pdg_latexform(rv,exv,nv)[0] 
+            r = "$"+pdg_latexform(rv,exv,nv,explim=explim)[0] 
         else:
             rv = int(np.round(val/(10**(ex+1)),n)*10**n)
-            r = "$"+pdg_latexform(rv,int(np.floor(np.log10(np.abs((val))))),n)[0] 
+            r = "$"+pdg_latexform(rv,int(np.floor(np.log10(np.abs((val))))),n,explim=explim)[0] 
         
-        r = r +" ^{+"+pdg_latexform(top,ext,nt,expforce)[0]+"}_{-"+pdg_latexform(bot,exb,nb,expforce)[0]+"}$"
+        r = r +" ^{+"+pdg_latexform(top,ext,nt,expforce,explim=explim)[0]+"}_{-"+pdg_latexform(bot,exb,nb,expforce,explim=explim)[0]+"}$"
     return r
 
 
@@ -1061,14 +1077,21 @@ class GetDistPlotter(_BaseObject):
             std = root.std(param.name)
             tt = (mean-std,mean+std)
         else:
-            tt = root.twoTailLimits(param.name,kwargs.get("whisker_fraction",0.68))
+            tt = density.getLimits(kwargs.get("whisker_fraction",0.68))
+            tt= (np.nan if tt[2] else tt[0],np.nan if tt[3] else tt[1])
+
         title_limit = title_limit if title_limit is not None else self.settings.title_limit
         
         ekwargs = dict([(k,v) for k,v in self._get_line_styles(plotno, **kwargs).items() if "whisker" not in k])
         
         self.lines_added[plotno] = kwargs
         #print([mean],[0+plotno],np.array([[mean-tt[0]],[tt[1]-mean]]).shape, ekwargs) 
-        l = ax.errorbar([mean],[0+plotno],xerr=np.array([[mean-tt[0]],[tt[1]-mean]]),**ekwargs)
+        if tt[0] is np.nan:
+            l = ax.errorbar([tt[1]],[0+plotno],xerr=(tt[1]-density.bounds()[0])-(density.bounds()[1]-density.bounds()[0])/10. ,**(ekwargs | {"xuplims":True,'marker':None}))
+        elif tt[1] is np.nan:
+            l = ax.errorbar([tt[0]],[0+plotno],xerr=(-tt[0]-density.bounds()[1])-(density.bounds()[1]-density.bounds()[0])/10. ,**(ekwargs | {"xlolims":True,'marker':None}))
+        else:
+            l = ax.errorbar([mean],[0+plotno],xerr=np.array([[mean-tt[0]],[tt[1]-mean]]),**ekwargs)
         
         #print(kwargs.get("whisker_ref"),plotno,kwargs.get("whisker_ref")) 
         if kwargs.get("whisker_ref") is not None and plotno==kwargs.get("whisker_ref"):
@@ -1078,7 +1101,8 @@ class GetDistPlotter(_BaseObject):
             alpha = kwargs.get("whisker_ref_alpha",l[0].get_alpha())
             ax.axvline(mean,color=c,ls=ls,lw=lw,alpha=alpha)
         if kwargs.get("whisker_both"):
-            select = (density.x>mean+(tt[0]-mean)* kwargs["whisker_both_cut"] ) * (density.x<mean+(tt[1]-mean)*kwargs["whisker_both_cut"] )
+            select = (density.x>mean+(tt[0]-mean)* kwargs["whisker_both_cut"]*(2.5 if tt[1] is  np.nan  else 1) ) if tt[0] is not np.nan  else np.ones_like(density.x,dtype=bool)
+            select *= (density.x<mean+(tt[1]-mean)* kwargs["whisker_both_cut"]*(2.5 if tt[0] is  np.nan  else 1) ) if tt[1] is not np.nan  else np.ones_like(density.x,dtype=bool)
             c = kwargs.get("whisker_both_color",l[0].get_color())
             ls = kwargs.get("whisker_both_ls",l[0].get_linestyle())
             lw = kwargs.get("whisker_both_lw",l[0].get_linewidth())
@@ -1086,13 +1110,22 @@ class GetDistPlotter(_BaseObject):
             ax.plot(density.x[select], plotno + density.P[select]*.5,lw=lw,c=c,ls=ls,alpha=alpha)
         if kwargs.get("whisker_print_mean"):
             
-            txt = pdg_format(mean,tt)
+            txt = pdg_format(mean,tt,kwargs.get("whisker_print_mean_limit",0.68),explim=kwargs.get("whisker_print_mean_explim",5))
             
-            ax.text(mean,plotno+kwargs.get("whisker_print_mean_pad",0.2),txt,
-                    ha="center",color=kwargs.get("whisker_print_mean_color",kwargs.get("color")),
+            ha = "center"
+            pos = mean
+            if tt[0] is np.nan:
+                ha = "left"
+                pos = density.bounds()[0]+(density.bounds()[1]-density.bounds()[0])/20.
+            if tt[1] is np.nan:
+                ha = "right"
+                pos = density.bounds()[1]-(density.bounds()[1]-density.bounds()[0])/20.
+            ax.text(pos,plotno+kwargs.get("whisker_print_mean_pad",0.2),txt,
+                    ha=ha,color=kwargs.get("whisker_print_mean_color",kwargs.get("color")),
                     fontsize=kwargs.get("whisker_print_mean_fontsize",self._scaled_fontsize(self.settings.axes_fontsize)),
                     alpha=kwargs.get("whisker_print_mean_alpha",1),
-                    bbox=dict(facecolor='white', edgecolor='none', pad=0))
+                    path_effects=[PathEffects.withStroke(linewidth=4,foreground="w")])
+                    #bbox=dict(facecolor='white', edgecolor='none', pad=0))
 
 
 
@@ -1660,7 +1693,7 @@ class GetDistPlotter(_BaseObject):
             (('print_mean_fontsize','whisker_print_mean_fontsize'),None),
             (('print_mean_color',"whisker_print_mean_color"),None),
             (('print_mean_alpha','whisker_print_mean_alpha'),None),
-            ]
+            (('print_mean_explim','whisker_print_mean_explim'),)]
 
 
 
