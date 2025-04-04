@@ -123,7 +123,7 @@ def pdg_format(val, tts, conf=0,explim=5,pdg=True):
         nerr,n,ex = pdg_digits(merr,pdg)
         if val<merr:
             rv,nv,exv = pdg_digits(val,pdg)
-            r = "$"+pdg_latexform(rv,exv,nv)[0] 
+            r = "$"+pdg_latexform(rv,exv,nv,explim=explim)[0] 
         else:
             rv = int(np.round(val/(10**(ex+1)),n)*10**n)
             r = "$"+pdg_latexform(rv,int(np.floor(np.log10(np.abs((val))))),n,explim=explim)[0] 
