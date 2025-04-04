@@ -37,16 +37,17 @@ from getdist.types import empty_dict
 """Plotting scripts for GetDist outputs"""
 
 
-def pdg_digits(v):
+def pdg_digits(v,enforce_pdg=True):
     # return the relevant three digits for pdg format, the exponent and the number of digits 
     ex = int(np.floor(np.log10(np.abs((v)))))
     threedgt = int(np.floor((v)/(10**(ex-2))))
-    n = 2 if threedgt<355 else 1
+    n = 2 if threedgt<355 or not enforce_pdg else 1
     if threedgt>=950:
         threedgt=100
         ex+=1
-        n+=1
+        n = 2
     return int(np.round(threedgt/10**3,n)*10**n),n,ex
+
 def pdg_latexform(v,ex,n,expforce=False,explim=5):
     # buid the latex form of the number
     # decides to go to x.yyy x 10^nnn if |nnn|>explim or if exforce is true
@@ -79,28 +80,35 @@ def pdg_latexform(v,ex,n,expforce=False,explim=5):
                 # special case the number is 1.0, keep it this way
                 pass
             else:
-                r = r[:-i]
+                r = r[:-i+1] # keep trailing . for now
         elif r[-i]=="1"  :
             if -i+2<0:
                 # special case, the number is 0.-some zeros-10, keep it this way
                 r = r[:-i+2]
         else : 
             r = r[:-i+1]
-            
+        # finally add zero if we don't have enough significant figures
+        rn = r.replace(".","")
+        if len(rn)<n or rn[-n]=="0":
+            # add trailing zero
+            r = r+"0"
+        # if we still have a trailing . remove it
+        if r[-1]==".":
+            r=r[:-1]
     return r+trail,expme
 
-def pdg_format(val, tts, conf=0,explim=5):
+def pdg_format(val, tts, conf=0,explim=5,pdg=True):
     # Do something about limits
     if tts[0] is np.nan:
         # lower limit !
-        nerr,n,ex = pdg_digits(tts[1])
+        nerr,n,ex = pdg_digits(tts[1],pdg)
         r = "$ < "+pdg_latexform(nerr,ex,n,explim=explim)[0]
         if val:
             r+= "\\ \\ (%2d\\%%)$"%int(100*conf)
         return r
     elif tts[1] is np.nan:
         # upper limit !
-        nerr,n,ex = pdg_digits(tts[0])
+        nerr,n,ex = pdg_digits(tts[0],pdg)
         r = "$ > "+pdg_latexform(nerr,ex,n,explim=explim)[0]
         if val:
             r+= "\\ \\ (%2\\%%)$"%int(100*conf)
@@ -112,9 +120,9 @@ def pdg_format(val, tts, conf=0,explim=5):
     errs = val-tts[0],tts[1]-val
     if abs(errs[1]-errs[0])< ((errs[1]+errs[0])/40.):
         merr = max(errs)
-        nerr,n,ex = pdg_digits(merr)
+        nerr,n,ex = pdg_digits(merr,pdg)
         if val<merr:
-            rv,nv,exv = pdg_digits(val)
+            rv,nv,exv = pdg_digits(val,pdg)
             r = "$"+pdg_latexform(rv,exv,nv)[0] 
         else:
             rv = int(np.round(val/(10**(ex+1)),n)*10**n)
@@ -122,10 +130,10 @@ def pdg_format(val, tts, conf=0,explim=5):
         r=r+" \\pm "+pdg_latexform(nerr,ex,n,explim=explim)[0]+"$"
     else:
         merr = min(errs)
-        nerr,n,ex = pdg_digits(merr)
+        nerr,n,ex = pdg_digits(merr,pdg)
         expforce = pdg_latexform(val,ex,n,explim=explim)[1]
-        bot,nb,exb = pdg_digits(errs[0])
-        top,nt,ext = pdg_digits(errs[1])
+        bot,nb,exb = pdg_digits(errs[0],pdg)
+        top,nt,ext = pdg_digits(errs[1],pdg)
         if val<merr:
             rv,nv,exv = pdg_digits(val)
             r = "$"+pdg_latexform(rv,exv,nv,explim=explim)[0] 
@@ -1110,7 +1118,7 @@ class GetDistPlotter(_BaseObject):
             ax.plot(density.x[select], plotno + density.P[select]*.5,lw=lw,c=c,ls=ls,alpha=alpha)
         if kwargs.get("whisker_print_mean"):
             
-            txt = pdg_format(mean,tt,kwargs.get("whisker_print_mean_limit",0.68),explim=kwargs.get("whisker_print_mean_explim",5))
+            txt = pdg_format(mean,tt,kwargs.get("whisker_print_mean_limit",0.68),explim=kwargs.get("whisker_print_mean_explim",5),pdg=kwargs["whisker_print_mean_strict_pdg"])
             
             ha = "center"
             pos = mean
@@ -1693,8 +1701,8 @@ class GetDistPlotter(_BaseObject):
             (('print_mean_fontsize','whisker_print_mean_fontsize'),None),
             (('print_mean_color',"whisker_print_mean_color"),None),
             (('print_mean_alpha','whisker_print_mean_alpha'),None),
-            (('print_mean_explim','whisker_print_mean_explim'),)]
-
+            (('print_mean_explim','whisker_print_mean_explim'),),
+            (('print_mean_strict_pdg','whisker_print_mean_strict_pdg'),False)]
 
 
         wh_options = {}
