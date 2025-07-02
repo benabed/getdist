@@ -1071,11 +1071,13 @@ class GetDistPlotter(_BaseObject):
         param = self._check_param(root, param)
         ax = self.get_axes(ax, pars=(param,))
         
+        #print("------ %s ------"%param.name)
         if isinstance(root, MixtureND):
             density = root.density1D(param.name)
             if not normalized:
                 density.normalize(by='max')
         else:
+            #print("here")
             density = self.sample_analyser.get_density(root, param, likes=self.settings.plot_meanlikes)
             if density is None:
                 return None
@@ -1085,9 +1087,23 @@ class GetDistPlotter(_BaseObject):
             std = root.std(param.name)
             tt = (mean-std,mean+std)
         else:
+            tt0 = density.getLimits(0.001)
             tt = density.getLimits(kwargs.get("whisker_fraction",0.68))
+            #tt95 = density.getLimits(0.95)
+            #print(tt0)
+            #print("fraction",kwargs.get("whisker_fraction",0.68))
+            #print(tt95)
+            if not (tt0[2] or tt0[3] or tt[2] or tt[3]): #or tt95[2] or tt95[3]):
+                peak_ap = (tt0[0]+tt0[1])/2
+                #print("mean and peak",mean,peak_ap)
+                #print((tt[1]-tt[0])/20)
+                if (abs(mean-peak_ap)>(tt[1]-tt[0])/20 and kwargs.get("whisker_peak_or_mean","auto").lower()=="auto") or kwargs.get("whisker_peak_or_mean","auto").lower()=="peak" :
+                    # difference between mean and approximated peak larger than 1sigma/10
+                    # default to approx peak
+                    mean = peak_ap 
+                    print(param.name,": Warning change plot peak rather than mean")
             tt= (np.nan if tt[2] else tt[0],np.nan if tt[3] else tt[1])
-
+        #print(tt)
         title_limit = title_limit if title_limit is not None else self.settings.title_limit
         
         ekwargs = dict([(k,v) for k,v in self._get_line_styles(plotno, **kwargs).items() if "whisker" not in k])
@@ -1095,9 +1111,18 @@ class GetDistPlotter(_BaseObject):
         self.lines_added[plotno] = kwargs
         #print([mean],[0+plotno],np.array([[mean-tt[0]],[tt[1]-mean]]).shape, ekwargs) 
         if tt[0] is np.nan:
-            l = ax.errorbar([tt[1]],[0+plotno],xerr=(tt[1]-density.bounds()[0])-(density.bounds()[1]-density.bounds()[0])/10. ,**(ekwargs | {"xuplims":True,'marker':None}))
+            #l = ax.errorbar([tt[1]],[0+plotno],xerr=(tt[1]-density.bounds()[0])-(density.bounds()[1]-density.bounds()[0])/10. ,**(ekwargs | {"xuplims":True,'marker':None}))
+            if kwargs.get("whisker_limit_absolute_value",None) is not None:
+                xe =  tt[1]- kwargs["whisker_limit_absolute_value"]
+            else:
+                xe =  tt[1]- density.bounds()[0] - (density.bounds()[1]-density.bounds()[0])*kwargs.get("whisker_limit_relative_value",.1)
+            l = ax.errorbar([tt[1]],[0+plotno],xerr=xe ,**(ekwargs | {"xuplims":True,'marker':None}))
         elif tt[1] is np.nan:
-            l = ax.errorbar([tt[0]],[0+plotno],xerr=(-tt[0]-density.bounds()[1])-(density.bounds()[1]-density.bounds()[0])/10. ,**(ekwargs | {"xlolims":True,'marker':None}))
+            if kwargs.get("whisker_limit_absolute_value",None) is not None:
+                xe =  -tt[0]- kwargs["whisker_limit_absolute_value"]
+            else:
+                xe =  tt[0]- density.bounds()[1] - (density.bounds()[1]-density.bounds()[0])*kwargs.get("whisker_limit_relative_value",.1)
+            l = ax.errorbar([tt[0]],[0+plotno],xerr=xe ,**(ekwargs | {"xlolims":True,'marker':None}))
         else:
             l = ax.errorbar([mean],[0+plotno],xerr=np.array([[mean-tt[0]],[tt[1]-mean]]),**ekwargs)
         
@@ -1109,8 +1134,8 @@ class GetDistPlotter(_BaseObject):
             alpha = kwargs.get("whisker_ref_alpha",l[0].get_alpha())
             ax.axvline(mean,color=c,ls=ls,lw=lw,alpha=alpha)
         if kwargs.get("whisker_both"):
-            select = (density.x>mean+(tt[0]-mean)* kwargs["whisker_both_cut"]*(2.5 if tt[1] is  np.nan  else 1) ) if tt[0] is not np.nan  else np.ones_like(density.x,dtype=bool)
-            select *= (density.x<mean+(tt[1]-mean)* kwargs["whisker_both_cut"]*(2.5 if tt[0] is  np.nan  else 1) ) if tt[1] is not np.nan  else np.ones_like(density.x,dtype=bool)
+            select = (density.x>mean+(tt[0]-mean)* kwargs["whisker_both_cut"] ) if tt[0] is not np.nan  else np.ones_like(density.x,dtype=bool)
+            select *= (density.x<mean+(tt[1]-mean)* kwargs["whisker_both_cut"] ) if tt[1] is not np.nan  else np.ones_like(density.x,dtype=bool)
             c = kwargs.get("whisker_both_color",l[0].get_color())
             ls = kwargs.get("whisker_both_ls",l[0].get_linestyle())
             lw = kwargs.get("whisker_both_lw",l[0].get_linewidth())
@@ -1646,8 +1671,9 @@ class GetDistPlotter(_BaseObject):
                 c['lw'] = lws[i]
         return line_args
 
-    def _make_whisker_args(self, nroots, **kwargs):
+    def _make_whisker_args(self, nroots, param,**kwargs):
         whisker_args = kwargs.get('whisker_args')
+        #print("WH before",whisker_args)
         if whisker_args is None:
             whisker_args = kwargs.get('line_args')
         if whisker_args is None:
@@ -1661,11 +1687,14 @@ class GetDistPlotter(_BaseObject):
         colors = self._get_color_at_index(kwargs.get('colors'))
 
         def _get_list(tag):
+
             ret = kwargs.get(tag)
             if ret is None:
                 return None
             if not isinstance(ret, (list, tuple)):
                 return [ret] * nroots
+            else:
+                return ret + [None]*(nroots-len(ret))
             return ret
 
         lws = _get_list('lws')
@@ -1702,11 +1731,21 @@ class GetDistPlotter(_BaseObject):
             (('print_mean_color',"whisker_print_mean_color"),None),
             (('print_mean_alpha','whisker_print_mean_alpha'),None),
             (('print_mean_explim','whisker_print_mean_explim'),),
-            (('print_mean_strict_pdg','whisker_print_mean_strict_pdg'),False)]
+            (('print_mean_strict_pdg','whisker_print_mean_strict_pdg'),False),
+            (('peak_or_mean','whisker_peak_or_mean'),"mean"),
+            (('limit_absolute_value','whisker_limit_absolute_value'),None),
+            (('limit_relative_value','whisker_limit_relative_value'),.1),
+            (('print_mean_limit','whisker_print_mean_limit'),0.68)]
 
-
+        wh_defaults_names = []
+        for w in wh_defaults:
+            if isinstance(w[0], (list, tuple)):
+                for ww in w[0]:
+                    wh_defaults_names.append(ww)
+            else:
+                wh_defaults_names.append(w[0])
         wh_options = {}
-        for i,w in enumerate(wh_defaults):
+        for ii,w in enumerate(wh_defaults):
             opt = [None]
             if len(w)==2:
                 opt += [[w[1]]*nroots]
@@ -1714,7 +1753,7 @@ class GetDistPlotter(_BaseObject):
                 for j in range(0,len(w[0])):
                     opt += [_get_list("whisker_"+w[0][j])]
                     nopt = w[0][j]
-                    #print(j,nopt)
+                    #print(j,nopt,opt,nroots)
             else:
                 opt += [_get_list("whisker_"+w[0])]
                 nopt = w[0]
@@ -1724,8 +1763,10 @@ class GetDistPlotter(_BaseObject):
                 if rpt is None:
                     rpt=o
                 else:
+                    #print("-->",nopt,rpt,o)
                     rpt = [o[i] if o and i < len(o) and o[i] is not None else rpt[i] for i in range(nroots)]
                     #print(i,rpt)
+            #print(nopt,rpt)
             wh_options[nopt] = rpt
         
         for i, args in enumerate(whisker_args):
@@ -1743,6 +1784,13 @@ class GetDistPlotter(_BaseObject):
                 if v and i < len(v) and v[i] is not None:
                     c[k] = v[i]
         #print("WH",whisker_args)
+        for i,wh in enumerate(whisker_args):
+            for nn in wh_defaults_names:
+                if nn+"_"+param in kwargs:
+                    override = _get_list(nn+"_"+param)[i]
+                    #print(nn,wh[nn],override)
+                    if override is not None:
+                        wh[nn] = override
         return whisker_args
 
 
@@ -1940,7 +1988,7 @@ class GetDistPlotter(_BaseObject):
         
         whisker = kwargs.get("whisker",False)
         if whisker:
-            whisker_args = self._make_whisker_args(len(roots), **kwargs)
+            whisker_args = self._make_whisker_args(len(roots), param.name, **kwargs)
             nw = len(roots)
             padtop = kwargs.get('whisker_pad_top', kwargs.get('whisker_pad', [0.8]))[0]
             padbottom = kwargs.get('whisker_pad_bottom', kwargs.get('whisker_pad', [0.8]))[0]
